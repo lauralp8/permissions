@@ -503,10 +503,11 @@ if 'roles' in config_data and config_data['roles']:
 else:
     print("\n[WARNING] No roles configured in config.yaml - Skipping role creation")
 
-
+'''
 # LOGS BACKUP
 # Obtener event logs de la cabina como backup
 if get_event_logs(max_records=100):
     print("\n[SUCCESS] Event logs backup completed!")
 else:
     print("\n[WARNING] Event logs backup failed (non-critical)")
+'''
