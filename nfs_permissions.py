@@ -80,10 +80,16 @@ def config_loader(path="config.yaml"):
             print(f"[ERROR]Incomplete configuration: missing 'cluster' section")
             return None
         
+        # Validar estructura: debe contener seccion 'svm'
+        if 'svm' not in config_data:
+            print(f"[ERROR] Incomplete configuration: missing 'svm' section")
+            return None
+        
         print(f"[+] Configuration loaded successfully")
 
         # Mostrar resumen de la configuración cargada
         print(f"[+] Target cluster: {config_data['cluster'].get('host', 'N/A')}")
+        print(f"[+] SVM to create: {config_data['svm'].get('name', 'N/A')}")
         
         return config_data
     
@@ -233,144 +239,156 @@ def cluster_connection(cluster_config):
 
 
 # ============================================================================
-# NFS PERMISSIONS FUNCTIONS
+# NFS LOGIN PERMISSIONS FUNCTION
 # ============================================================================
 
-def create_login_roles(roles_list):
+def create_login_roles(roles_config):
     """
-    Crea roles de login en NetApp ONTAP basándose en la configuración YAML
+    Crea roles de login en la SVM con permisos específicos de comando
     
-    Itera por la lista de roles definidos en el config.yaml y crea cada uno
-    usando el comando REST API equivalente a:
-    security login role create -role <role> -vserver <svm> -cmddirname "<cmddirname>" -access <access>
+    Esta función itera sobre una lista de configuraciones de roles y crea
+    cada uno usando la API REST de NetApp ONTAP. Cada rol puede tener
+    diferentes niveles de acceso a directorios de comandos específicos.
+    
+    Equivalente CLI: security login role create -role <name> -vserver <svm> 
+                     -cmddirname <path> -access <level>
     
     Args:
-        roles_list: Lista de diccionarios con la configuración de roles desde YAML
-                    Cada elemento debe tener: role, svm, cmddirname, access
+        roles_config (list): Lista de diccionarios con configuración de roles.
+                             Cada diccionario debe contener:
+                             - role: Nombre del rol (ej: 'telcoedgeadmin')
+                             - svm: Nombre de la SVM
+                             - cmddirname: Directorio de comando (ej: 'volume file clone')
+                             - access: Nivel de acceso ('readonly', 'all', 'none')
     
     Returns:
-        bool: True si todos los roles se crearon exitosamente, False en caso contrario
+        bool: True si todos los roles se crearon exitosamente, False si hubo errores
     """
     try:
         print(f"\n[*] Creating login roles from configuration...")
         
-        # Validar que haya al menos un rol para crear
-        if not roles_list or len(roles_list) == 0:
-            print(f"[WARNING] No roles defined in configuration")
-            return True
+        # Validar que se proporcionó una lista
+        if not roles_config or not isinstance(roles_config, list):
+            print(f"[ERROR] Invalid roles configuration - expecting a list")
+            return False
         
-        print(f"[+] Found {len(roles_list)} role(s) to create")
+        print(f"[+] Found {len(roles_config)} role(s) to create")
         
         # Contador de éxitos y fallos
         success_count = 0
-        fail_count = 0
+        failed_count = 0
         created_roles = []
         
-        # Iterar por cada rol en la lista
-        for idx, role_config in enumerate(roles_list, start=1):
-            try:
-                # Validar que existan todos los campos requeridos
-                required_fields = ['role', 'svm', 'cmddirname', 'access']
-                missing_fields = [field for field in required_fields if field not in role_config]
-                
-                if missing_fields:
-                    print(f"[ERROR] Role #{idx}: Missing required fields: {', '.join(missing_fields)}")
-                    fail_count += 1
-                    continue
-                
-                role_name = role_config['role']
-                svm_name = role_config['svm']
-                cmd_dirname = role_config['cmddirname']
-                access_level = role_config['access']
-                
-                print(f"\n[{idx}/{len(roles_list)}] Creating role privilege:")
-                print(f"    Role: {role_name}")
-                print(f"    SVM: {svm_name}")
-                print(f"    Command: {cmd_dirname}")
-                print(f"    Access: {access_level}")
-                
-                # Crear el objeto Role con privilegios
-                # Basado en la documentación: https://library.netapp.com/ecmdocs/ECMLP3351667/html/resources/role.html
-                new_role = Role()
-                new_role.name = role_name
-                
-                # Especificar el owner (SVM) por nombre
-                new_role.owner = {"name": svm_name}
-                
-                # Crear el privilegio para este comando
-                # El path corresponde al cmddirname
-                privilege = RolePrivilege()
-                privilege.path = cmd_dirname
-                privilege.access = access_level
-                
-                # Asignar la lista de privilegios al rol
-                new_role.privileges = [privilege]
-                
-                # POST: Crear el rol en la cabina NetApp
-                response = new_role.post()
-                
-                print(f"[+] Role privilege created successfully!")
-                
-                # Guardar información del rol creado
-                role_info = {
-                    'role': role_name,
-                    'svm': svm_name,
-                    'cmddirname': cmd_dirname,
-                    'access': access_level,
-                    'created_at': datetime.now().isoformat()
-                }
-                created_roles.append(role_info)
-                success_count += 1
-                
-            except NetAppRestError as error:
-                print(f"[ERROR] Failed to create role #{idx}")
-                print(f"[ERROR] HTTP Status: {error.status_code}")
-                
-                # Analizar el tipo de error
-                if error.status_code == 409:
-                    print(f"[ERROR] Role privilege already exists")
-                elif error.status_code == 404:
-                    print(f"[ERROR] SVM '{svm_name}' not found")
-                elif error.status_code == 400:
-                    print(f"[ERROR] Invalid parameters - check command directory name or access level")
-                
-                if error.http_err_response and error.http_err_response.http_response:
-                    print(f"[ERROR] Details: {error.http_err_response.http_response.text}")
-                
-                fail_count += 1
+        # AGRUPAR roles por (role_name, svm) para crear una sola vez con múltiples privilegios
+        from collections import defaultdict
+        grouped_roles = defaultdict(list)
+        
+        for role_entry in roles_config:
+            # Validar campos requeridos
+            required_fields = ['role', 'svm', 'cmddirname', 'access']
+            missing_fields = [field for field in required_fields if field not in role_entry]
+            
+            if missing_fields:
+                print(f"[WARNING] Skipping role entry - missing fields: {', '.join(missing_fields)}")
+                failed_count += 1
                 continue
             
-            except Exception as e:
-                print(f"[ERROR] Unexpected error creating role #{idx}: {type(e).__name__}")
-                print(f"[ERROR] Details: {str(e)}")
-                fail_count += 1
-                continue
+            # Agrupar por (nombre_rol, svm)
+            key = (role_entry['role'], role_entry['svm'])
+            grouped_roles[key].append({
+                'cmddirname': role_entry['cmddirname'],
+                'access': role_entry['access']
+            })
         
-        # Resumen final
+        # Iterar sobre cada grupo de roles
+        for (role_name, svm_name), privileges_list in grouped_roles.items():
+            try:
+                print(f"\n[*] Creating role '{role_name}' for SVM '{svm_name}'...")
+                print(f"    Privileges to configure: {len(privileges_list)}")
+                
+                # Construir lista de privilegios para la API
+                # Cada privilegio necesita 'path' (cmddirname) y 'access'
+                privileges = []
+                for priv in privileges_list:
+                    privilege_obj = {
+                        'path': priv['cmddirname'],
+                        'access': priv['access']
+                    }
+                    privileges.append(privilege_obj)
+                    print(f"    - Command: '{priv['cmddirname']}' -> Access: '{priv['access']}'")
+                
+                # Crear objeto Role con la configuración
+                new_role = Role()
+                new_role.name = role_name
+                new_role.owner = {'name': svm_name}  # SVM owner
+                new_role.privileges = privileges
+                
+                # POST: Enviar petición de creación a la cabina
+                print(f"[*] Sending role creation request to NetApp cluster...")
+                new_role.post()
+                
+                print(f"[SUCCESS] Role '{role_name}' created successfully in SVM '{svm_name}'")
+                success_count += 1
+                
+                # Guardar información del rol creado
+                created_roles.append({
+                    'role_name': role_name,
+                    'svm': svm_name,
+                    'privileges': privileges,
+                    'status': 'created'
+                })
+                
+            except NetAppRestError as error:
+                print(f"[ERROR] Failed to create role '{role_name}' in SVM '{svm_name}'")
+                print(f"[ERROR] HTTP Status: {error.status_code}")
+                
+                # Manejar códigos de error específicos
+                if error.status_code == 409:
+                    print(f"[ERROR] Role already exists")
+                elif error.status_code == 404:
+                    print(f"[ERROR] SVM '{svm_name}' not found")
+                else:
+                    if error.http_err_response and error.http_err_response.http_response:
+                        print(f"[ERROR] Details: {error.http_err_response.http_response.text}")
+                
+                failed_count += 1
+                created_roles.append({
+                    'role_name': role_name,
+                    'svm': svm_name,
+                    'privileges': privileges,
+                    'status': 'failed',
+                    'error': str(error)
+                })
+            
+            except Exception as e:
+                print(f"[ERROR] Unexpected error creating role '{role_name}': {type(e).__name__}")
+                print(f"[ERROR] Details: {str(e)}")
+                failed_count += 1
+        
+        # SUMMARY: Mostrar resumen de la operación
         print(f"\n{'='*70}")
         print(f"  Role Creation Summary")
         print(f"{'='*70}")
-        print(f"Total roles processed: {len(roles_list)}")
-        print(f"Successfully created: {success_count}")
-        print(f"Failed: {fail_count}")
+        print(f"Total roles processed: {len(grouped_roles)}")
+        print(f"Successfully created:  {success_count}")
+        print(f"Failed:                {failed_count}")
         print(f"{'='*70}\n")
         
-        # Guardar log de roles creados
-        if created_roles:
-            log_data = {
-                'total_processed': len(roles_list),
-                'successful': success_count,
-                'failed': fail_count,
-                'created_roles': created_roles
-            }
-            save_to_log('login_roles_created', log_data)
+        # Guardar log con timestamp
+        log_data = {
+            'operation': 'create_login_roles',
+            'total_processed': len(grouped_roles),
+            'successful': success_count,
+            'failed': failed_count,
+            'roles': created_roles
+        }
+        save_to_log('role_creation', log_data)
         
         # Retornar True solo si todos fueron exitosos
-        return fail_count == 0
+        return failed_count == 0
     
-    # CONTROL DE ERRORES GENERALES
     except Exception as e:
-        print(f"[ERROR] Unexpected error in create_login_roles function: {type(e).__name__}")
+        print(f"[ERROR] Unexpected error in create_login_roles: {type(e).__name__}")
         print(f"[ERROR] Details: {str(e)}")
         return False
 
@@ -474,15 +492,16 @@ if not cluster_connection(config_data['cluster']):
 
 print("\n[+] All pre-checks passed - Ready to create RBAC users")
 
-# NFS PERMISSIONS CHECK
-# Crear roles de login basados en la configuración
-if 'roles' in config_data:
+# NFS LOGIN PERMISSIONS
+# Crear roles de login con permisos específicos desde config.yaml
+if 'roles' in config_data and config_data['roles']:
+    print("\n[*] Starting role creation process...")
     if create_login_roles(config_data['roles']):
         print("\n[SUCCESS] All login roles created successfully!")
     else:
-        print("\n[WARNING] Some roles failed to create - Check logs for details")
+        print("\n[WARNING] Some roles failed to create (check logs for details)")
 else:
-    print("\n[INFO] No roles configured in config.yaml - Skipping role creation")
+    print("\n[WARNING] No roles configured in config.yaml - Skipping role creation")
 
 
 # LOGS BACKUP
