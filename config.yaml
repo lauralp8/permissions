@@ -1,0 +1,25 @@
+# ============================================================================
+# CONFIGURACIÓN PARA CREAR SVM CON SERVICIO FCP USANDO API REST DE ONTAP
+# ============================================================================
+
+# Configuración del clúster
+cluster:
+  host: cluster1.demo.netapp.com
+  username: admin
+  password: Netapp1!
+
+# Configuración de la SVM FCP
+svm: 
+  name: svm_1_cluster
+
+# Configuración de usuario RBAC con múltiples aplicaciones
+rbac_user:
+  name: edgevsadmin
+  applications: 
+    - http
+    - ssh
+    - ontapi
+  authentication_method: password
+  role: vsadmin
+  password: NetApp123!
+  
