@@ -490,10 +490,17 @@ if not cluster_connection(config_data['cluster']):
     print("[ERROR] Fix connection issues before continuing")
     exit(1)
 
-print("\n[+] All pre-checks passed - Ready to create RBAC users")
+print("\n[+] All pre-checks passed - Ready to create users")
 
 # NFS LOGIN PERMISSIONS
 # Crear roles de login con permisos específicos desde config.yaml
+print(f"[DEBUG] Keys in config_data: {list(config_data.keys())}")
+print(f"[DEBUG] 'roles' in config_data: {'roles' in config_data}")
+if 'roles' in config_data:
+    print(f"[DEBUG] config_data['roles'] = {config_data['roles']}")
+    print(f"[DEBUG] Type: {type(config_data['roles'])}")
+    print(f"[DEBUG] Length: {len(config_data['roles']) if config_data['roles'] else 0}")
+
 if 'roles' in config_data and config_data['roles']:
     print("\n[*] Starting role creation process...")
     if create_login_roles(config_data['roles']):
