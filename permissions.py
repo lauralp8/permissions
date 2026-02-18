@@ -262,6 +262,25 @@ def create_roles(roles_config):
             print(f"[WARNING] No roles defined in configuration")
             return True
         
+        # PASO 0: Obtener información de las SVMs necesarias
+        svm_cache = {}  # {svm_name: svm_uuid}
+        
+        print(f"\n[*] Retrieving SVM information...")
+        for role_config in roles_config:
+            svm_name = role_config.get('svm')
+            if svm_name and svm_name not in svm_cache:
+                try:
+                    svm = Svm.find(name=svm_name)
+                    if svm:
+                        svm_cache[svm_name] = svm.uuid
+                        print(f"[+] Found SVM: {svm_name} (UUID: {svm.uuid})")
+                    else:
+                        print(f"[ERROR] SVM not found: {svm_name}")
+                        return False
+                except Exception as e:
+                    print(f"[ERROR] Could not retrieve SVM '{svm_name}': {str(e)}")
+                    return False
+        
         # PASO 1: Identificar roles únicos y crearlos
         unique_roles = {}  # {(role_name, svm_name): created_flag}
         
@@ -274,6 +293,7 @@ def create_roles(roles_config):
                 if key not in unique_roles:
                     unique_roles[key] = False
         
+        print(f"\n[*] Creating base roles...")
         print(f"[+] Unique roles to create: {len(unique_roles)}")
         
         # Crear cada rol único
@@ -282,9 +302,10 @@ def create_roles(roles_config):
                 print(f"\n[{idx}/{len(unique_roles)}] Creating role:")
                 print(f"    Role: {role_name}")
                 print(f"    SVM: {svm_name}")
+                print(f"    SVM UUID: {svm_cache.get(svm_name, 'N/A')}")
                 
-                # Crear el rol base
-                role = Role(role_name, owner={'name': svm_name})
+                # Crear el rol base con UUID de la SVM
+                role = Role(role_name, owner={'uuid': svm_cache[svm_name]})
                 role.post(poll=True)
                 
                 print(f"    [SUCCESS] Role created successfully")
@@ -329,17 +350,23 @@ def create_roles(roles_config):
                 cmd_dirname = role_config['cmddirname']
                 access_level = role_config['access']
                 
+                # Verificar que tenemos el UUID de la SVM
+                if svm_name not in svm_cache:
+                    print(f"[ERROR] Privilege #{idx}: SVM '{svm_name}' UUID not found")
+                    failed_count += 1
+                    continue
+                
                 print(f"\n[{idx}/{len(roles_config)}] Creating role privilege:")
                 print(f"    Role: {role_name}")
-                print(f"    SVM: {svm_name}")
+                print(f"    SVM: {svm_name} (UUID: {svm_cache[svm_name]})")
                 print(f"    Command: {cmd_dirname}")
                 print(f"    Access: {access_level}")
                 
-                # Crear el privilegio del rol usando RolePrivilege
+                # Crear el privilegio del rol usando RolePrivilege con UUID
                 role_privilege = RolePrivilege(
                     role_name,
                     cmd_dirname,
-                    owner={'name': svm_name}
+                    owner={'uuid': svm_cache[svm_name]}
                 )
                 
                 # Asignar nivel de acceso
