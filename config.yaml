@@ -12,4 +12,48 @@ cluster:
 svm: 
   name: svm_1_cluster
 
+# Configuración de roles
+roles:
+  - name: telcoedgeadmin
+    vserver: svm1
+    privileges:
+      - path: "volume file"
+        access: all
+      - path: vserver
+        access: readonly
+      - path: "system node"
+        access: readonly
+      - path: security
+        access: readonly
+      - path: "security login role"
+        access: readonly
+      - path: statistics
+        access: readonly
+      - path: "statistics catalog counter"
+        access: readonly
+      - path: "statistics catalog instance"
+        access: readonly
+      - path: "statistics catalog"
+        access: readonly
+      - path: "storage disk"
+        access: readonly
+      - path: "storage aggregate"
+        access: readonly
+      - path: "network interface"
+        access: readonly
+      - path: "volume efficiency"
+        access: all
+      - path: "qos policy-group"
+        access: all
+      - path: version
+        access: all
+      - path: event
+        access: all
+      - path: "volume file clone"
+        access: readonly
+      - path: "volume file clone split"
+        access: readonly
+      - path: "volume snapshot"
+        access: all
+
 

@@ -242,6 +242,160 @@ def cluster_connection(cluster_config):
 # LOGIN PERMISSIONS FUNCTION
 # ============================================================================
 
+def create_roles(roles_config):
+    """
+    Crea roles de seguridad en NetApp ONTAP con privilegios específicos
+    
+    Esta función crea roles SVM-scoped siguiendo exactamente los comandos:
+    security login role create -role <rolename> -vserver <vserver> -cmddirname <path> -access <level>
+    
+    Args:
+        roles_config: Lista de diccionarios con configuración de roles desde config.yaml
+                      Cada rol contiene: name, vserver, y lista de privileges
+    
+    Returns:
+        bool: True si todos los roles se crearon exitosamente, False si hubo errores
+    """
+    try:
+        print(f"\n[*] Starting role creation process...")
+        
+        # Validar que se haya proporcionado configuración de roles
+        if not roles_config:
+            print(f"[ERROR] No roles configuration provided")
+            return False
+        
+        roles_created = []
+        roles_failed = []
+        
+        # Iterar sobre cada rol en la configuración
+        for role_config in roles_config:
+            role_name = role_config.get('name')
+            vserver_name = role_config.get('vserver')
+            privileges_list = role_config.get('privileges', [])
+            
+            print(f"\n[*] Creating role: {role_name} for vserver: {vserver_name}")
+            
+            # Validar campos requeridos
+            if not role_name or not vserver_name:
+                print(f"[ERROR] Missing required fields (name or vserver) for role")
+                roles_failed.append({'name': role_name or 'UNKNOWN', 'error': 'Missing required fields'})
+                continue
+            
+            if not privileges_list:
+                print(f"[ERROR] No privileges defined for role {role_name}")
+                roles_failed.append({'name': role_name, 'error': 'No privileges defined'})
+                continue
+            
+            try:
+                # Obtener el UUID de la SVM
+                print(f"[+] Looking up SVM UUID for: {vserver_name}")
+                svm_obj = Svm.find(name=vserver_name)
+                
+                if not svm_obj:
+                    print(f"[ERROR] SVM '{vserver_name}' not found")
+                    roles_failed.append({'name': role_name, 'error': f'SVM {vserver_name} not found'})
+                    continue
+                
+                svm_uuid = svm_obj.uuid
+                print(f"[+] SVM UUID: {svm_uuid}")
+                
+                # Preparar la lista de privilegios para el rol
+                role_privileges = []
+                for priv in privileges_list:
+                    path = priv.get('path')
+                    access = priv.get('access')
+                    
+                    if not path or not access:
+                        print(f"[WARNING] Skipping invalid privilege: {priv}")
+                        continue
+                    
+                    # Crear objeto RolePrivilege
+                    privilege = RolePrivilege(
+                        path=path,
+                        access=access
+                    )
+                    role_privileges.append(privilege)
+                    print(f"  [+] Added privilege: path='{path}', access='{access}'")
+                
+                if not role_privileges:
+                    print(f"[ERROR] No valid privileges to create for role {role_name}")
+                    roles_failed.append({'name': role_name, 'error': 'No valid privileges'})
+                    continue
+                
+                # Crear el objeto Role con todos los parámetros necesarios
+                print(f"[*] Creating role '{role_name}' with {len(role_privileges)} privileges...")
+                
+                role = Role(
+                    name=role_name,
+                    owner={"uuid": svm_uuid},
+                    privileges=role_privileges
+                )
+                
+                # POST: Crear el rol en la cabina
+                response = role.post()
+                
+                if response.http_response.status_code in [200, 201]:
+                    print(f"[SUCCESS] Role '{role_name}' created successfully!")
+                    roles_created.append(role_name)
+                    
+                    # Guardar detalles del rol creado
+                    role_data = {
+                        'role_name': role_name,
+                        'vserver': vserver_name,
+                        'svm_uuid': svm_uuid,
+                        'privileges_count': len(role_privileges),
+                        'privileges': [{'path': p.path, 'access': p.access} for p in role_privileges],
+                        'http_status': response.http_response.status_code
+                    }
+                    save_to_log(f'role_created_{role_name}', role_data)
+                else:
+                    print(f"[ERROR] Unexpected response status: {response.http_response.status_code}")
+                    roles_failed.append({'name': role_name, 'error': f'HTTP {response.http_response.status_code}'})
+            
+            except NetAppRestError as error:
+                print(f"[ERROR] NetApp API error creating role '{role_name}'")
+                print(f"[ERROR] HTTP Status: {error.status_code}")
+                if error.http_err_response and error.http_err_response.http_response:
+                    error_text = error.http_err_response.http_response.text
+                    print(f"[ERROR] Details: {error_text}")
+                    roles_failed.append({'name': role_name, 'error': error_text})
+                else:
+                    print(f"[ERROR] Details: {str(error)}")
+                    roles_failed.append({'name': role_name, 'error': str(error)})
+            
+            except Exception as e:
+                print(f"[ERROR] Unexpected error creating role '{role_name}': {type(e).__name__}")
+                print(f"[ERROR] Details: {str(e)}")
+                roles_failed.append({'name': role_name, 'error': f'{type(e).__name__}: {str(e)}'})
+        
+        # RESUMEN FINAL
+        print(f"\n{'='*70}")
+        print(f"  Role Creation Summary")
+        print(f"{'='*70}")
+        print(f"Total roles processed: {len(roles_config)}")
+        print(f"Successfully created: {len(roles_created)}")
+        print(f"Failed: {len(roles_failed)}")
+        
+        if roles_created:
+            print(f"\n[SUCCESS] Created roles:")
+            for role in roles_created:
+                print(f"  ✓ {role}")
+        
+        if roles_failed:
+            print(f"\n[ERROR] Failed roles:")
+            for role in roles_failed:
+                print(f"  ✗ {role['name']}: {role['error']}")
+        
+        print(f"{'='*70}\n")
+        
+        # Retornar True solo si todos los roles se crearon exitosamente
+        return len(roles_failed) == 0
+    
+    except Exception as e:
+        print(f"[ERROR] Unexpected error in create_roles function: {type(e).__name__}")
+        print(f"[ERROR] Details: {str(e)}")
+        return False
+
 
 # ============================================================================
 # EVENT LOG RETRIEVAL FUNCTION
@@ -341,7 +495,16 @@ if not cluster_connection(config_data['cluster']):
 
 print("\n[+] All pre-checks passed - Ready to create roles")
 
-# LOGIN PERMISSIONS
+# LOGIN PERMISSIONS - CREATE ROLES
+# Crear roles de seguridad según la configuración
+if 'roles' in config_data and config_data['roles']:
+    print(f"\n[*] Found {len(config_data['roles'])} role(s) to create")
+    if create_roles(config_data['roles']):
+        print("\n[SUCCESS] All roles created successfully!")
+    else:
+        print("\n[WARNING] Some roles failed to create - check logs above")
+else:
+    print("\n[INFO] No roles configuration found in config.yaml - skipping role creation")
 
 
 '''
