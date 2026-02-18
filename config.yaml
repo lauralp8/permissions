@@ -12,17 +12,4 @@ cluster:
 svm: 
   name: svm_1_cluster
 
-roles:
-  - role: telcoedgeadmin
-    svm: svm_1_cluster
-    cmddirname: "volume file"
-    access: all
-  - role: telcoedgeadmin
-    svm: svm_1_cluster
-    cmddirname: "vserver"
-    access: readonly
-  - role: telcoedgeadmin
-    svm: svm_1_cluster
-    cmddirname: "security"
-    access: readonly
 
