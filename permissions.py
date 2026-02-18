@@ -246,8 +246,7 @@ def create_roles(roles_config):
     """
     Crea roles de seguridad en la SVM con permisos específicos
     
-    Recorre la lista de roles definidos en el config.yaml y crea cada uno
-    en la SVM especificada con los comandos y niveles de acceso configurados.
+    Primero identifica y crea los roles únicos, luego asigna privilegios a cada rol.
     
     Args:
         roles_config: Lista de diccionarios con configuración de roles
@@ -263,12 +262,57 @@ def create_roles(roles_config):
             print(f"[WARNING] No roles defined in configuration")
             return True
         
-        print(f"[+] Total roles to create: {len(roles_config)}")
+        # PASO 1: Identificar roles únicos y crearlos
+        unique_roles = {}  # {(role_name, svm_name): created_flag}
+        
+        for role_config in roles_config:
+            role_name = role_config.get('role')
+            svm_name = role_config.get('svm')
+            
+            if role_name and svm_name:
+                key = (role_name, svm_name)
+                if key not in unique_roles:
+                    unique_roles[key] = False
+        
+        print(f"[+] Unique roles to create: {len(unique_roles)}")
+        
+        # Crear cada rol único
+        for idx, ((role_name, svm_name), _) in enumerate(unique_roles.items(), 1):
+            try:
+                print(f"\n[{idx}/{len(unique_roles)}] Creating role:")
+                print(f"    Role: {role_name}")
+                print(f"    SVM: {svm_name}")
+                
+                # Crear el rol base
+                role = Role(role_name, owner={'name': svm_name})
+                role.post(poll=True)
+                
+                print(f"    [SUCCESS] Role created successfully")
+                unique_roles[(role_name, svm_name)] = True
+                
+            except NetAppRestError as error:
+                # Si el rol ya existe (409), no es un error crítico
+                if error.status_code == 409:
+                    print(f"    [INFO] Role already exists - continuing...")
+                    unique_roles[(role_name, svm_name)] = True
+                else:
+                    print(f"    [ERROR] NetApp API error")
+                    print(f"    [ERROR] HTTP Status: {error.status_code}")
+                    if error.http_err_response and error.http_err_response.http_response:
+                        print(f"    [ERROR] Details: {error.http_err_response.http_response.text}")
+                    
+            except Exception as e:
+                print(f"    [ERROR] Unexpected error: {type(e).__name__}")
+                print(f"    [ERROR] Details: {str(e)}")
+        
+        # PASO 2: Crear privilegios para cada rol
+        print(f"\n[*] Creating role privileges...")
+        print(f"[+] Total privileges to create: {len(roles_config)}")
         
         successful_count = 0
         failed_count = 0
         
-        # Recorrer cada rol en la configuración
+        # Recorrer cada privilegio en la configuración
         for idx, role_config in enumerate(roles_config, 1):
             try:
                 # Validar campos requeridos
@@ -276,7 +320,7 @@ def create_roles(roles_config):
                 missing_fields = [field for field in required_fields if field not in role_config]
                 
                 if missing_fields:
-                    print(f"[ERROR] Role #{idx}: Missing required fields: {', '.join(missing_fields)}")
+                    print(f"[ERROR] Privilege #{idx}: Missing required fields: {', '.join(missing_fields)}")
                     failed_count += 1
                     continue
                 
@@ -292,7 +336,6 @@ def create_roles(roles_config):
                 print(f"    Access: {access_level}")
                 
                 # Crear el privilegio del rol usando RolePrivilege
-                # La estructura en REST API es: /api/security/roles/{owner.uuid}/{name}/privileges
                 role_privilege = RolePrivilege(
                     role_name,
                     cmd_dirname,
@@ -309,16 +352,16 @@ def create_roles(roles_config):
                 successful_count += 1
                 
             except NetAppRestError as error:
-                print(f"    [ERROR] NetApp API error for role #{idx}")
+                print(f"    [ERROR] NetApp API error for privilege #{idx}")
                 print(f"    [ERROR] HTTP Status: {error.status_code}")
                 
                 if error.http_err_response and error.http_err_response.http_response:
                     error_text = error.http_err_response.http_response.text
                     print(f"    [ERROR] Details: {error_text}")
                     
-                    # Si el rol ya existe, no es un error crítico
+                    # Si el privilegio ya existe, no es un error crítico
                     if "already exists" in error_text.lower() or error.status_code == 409:
-                        print(f"    [INFO] Role privilege may already exist - continuing...")
+                        print(f"    [INFO] Privilege may already exist - continuing...")
                         successful_count += 1
                     else:
                         failed_count += 1
@@ -327,7 +370,7 @@ def create_roles(roles_config):
                     failed_count += 1
                     
             except Exception as e:
-                print(f"    [ERROR] Unexpected error for role #{idx}: {type(e).__name__}")
+                print(f"    [ERROR] Unexpected error for privilege #{idx}: {type(e).__name__}")
                 print(f"    [ERROR] Details: {str(e)}")
                 failed_count += 1
         
@@ -335,12 +378,13 @@ def create_roles(roles_config):
         print(f"\n{'='*70}")
         print(f"  Role Creation Summary")
         print(f"{'='*70}")
-        print(f"Total roles processed: {len(roles_config)}")
+        print(f"Unique roles created: {len(unique_roles)}")
+        print(f"Total privileges processed: {len(roles_config)}")
         print(f"Successfully created: {successful_count}")
         print(f"Failed: {failed_count}")
         print(f"{'='*70}\n")
         
-        # Retornar True si al menos se creó un rol exitosamente
+        # Retornar True si al menos se creó un privilegio exitosamente
         return successful_count > 0
     
     # CONTROL DE ERRORES
