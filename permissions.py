@@ -239,7 +239,7 @@ def cluster_connection(cluster_config):
 
 
 # ============================================================================
-# NFS LOGIN PERMISSIONS FUNCTION
+# LOGIN PERMISSIONS FUNCTION
 # ============================================================================
 
 
@@ -343,7 +343,7 @@ if not cluster_connection(config_data['cluster']):
 
 print("\n[+] All pre-checks passed - Ready to create users")
 
-# NFS LOGIN PERMISSIONS
+# LOGIN PERMISSIONS
 
 '''
 # LOGS BACKUP
